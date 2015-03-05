@@ -16,8 +16,11 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,50 +60,173 @@ public class MySqlEntity2Ddl {
 	}
 	public Set<Class<?>> getAllEntityClasses(String basePacageName){
 		Set<Class<?>> classes=new HashSet<Class<?>>();
+		String[] folderArr=basePacageName.split("\\.");
+		List<String> folderList=new LinkedList<String>();
+		for(String folderName:folderArr){
+			folderList.add(folderName);
+		}
 		String packageName = basePacageName;
         if (packageName.endsWith(".")) {
             packageName = packageName
                     .substring(0, packageName.lastIndexOf('.'));
         }
-        String package2Path = packageName.replace('.', '/');
-        Enumeration<URL> dirs;
-        try {
-            dirs = Thread.currentThread().getContextClassLoader().getResources(
-                    package2Path);
-            while (dirs.hasMoreElements()) {
-                URL url = dirs.nextElement();
-                String protocol = url.getProtocol();
-                if ("file".equals(protocol)) {
-                    logger.info("开始扫描class文件....");
-                    String filePath = URLDecoder.decode(url.getFile(), "UTF-8");
-                    scanPackage(filePath,basePacageName,classes);
-                } 
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
- 
+        getTargetPath("", folderList, "", false, classes);
+       
         return classes;
 		
 	}
+	public void getTargetPath(String currentPath,List<String> pathList,String packageName,boolean searchingStatus,Set<Class<?>> classes){
+		if(searchingStatus){
+			String targetFolder=pathList.get(0);
+			List<File> fileList=getFiles(currentPath);
+			List<String> pathListCopy;
+		    for(File file:fileList){
+		    	pathListCopy=new ArrayList<String>();
+		    	pathListCopy.addAll(pathList);
+		    	if(file.isDirectory()){
+		    	   String fileName=file.getName();
+				   if(isMatchPattern(targetFolder, fileName)){
+					   pathListCopy.remove(0);
+					   String newPackageName=packageName+"."+fileName;
+					   if(pathListCopy.size()==0){
+						   scanPackage(file.getPath(), newPackageName, classes);
+						   logger.info("Found matched package......"+newPackageName);
+					   }else{
+						   searchingStatus=false;
+						   getTargetPath(file.getPath(), pathListCopy, newPackageName, searchingStatus, classes);
+					   }
+					   
+				   }
+				   pathListCopy=new ArrayList<String>();
+			       pathListCopy.addAll(pathList);
+				   String newPackageName=packageName+"."+fileName;
+				   getTargetPath(file.getPath(), pathListCopy, newPackageName, true, classes);
+				   
+		    	}
+			   
+			}
+			
+			
+		}else{
+			String curPath=pathList.remove(0);
+			boolean isReachedBottom=false;
+			if(pathList.size()==0){
+				isReachedBottom=true;
+			}
+	       if(isMatchTwoStars(curPath)){
+	    	   String path;
+	    	   if(packageName.equals("")){
+	    		   URL file=this.getClass().getResource("/");
+		    	   path=file.getPath();
+	    	   }else{
+	    		   path=currentPath;
+	    	   }
+	    	   if(isReachedBottom){
+	    		   String finalPath=path;
+	    		   String newPackageName=packageName;
+	    		   scanPackage(finalPath, newPackageName, classes);
+	    		   logger.info("Found matched package......"+newPackageName);
+	    	   }else {
+	    		   List<File> fList=getFiles(path);
+	    		   searchingStatus=true;
+	    		   List<String> pathListCopy;
+	    		   for(File dir:fList){
+	    			   if(dir.isDirectory()){
+	    				   pathListCopy=new ArrayList<String>();
+		    			   pathListCopy.addAll(pathList);
+		    			   String newPackageName=packageName;
+		    			   if(!packageName.equals("")){
+		    				   newPackageName=newPackageName+".";
+		    			   }
+		    			   newPackageName=newPackageName+dir.getName();
+		    			   getTargetPath(dir.getPath(), pathListCopy, newPackageName, searchingStatus,classes);
+	    			   }
+	    			   
+	    			   
+	    		   }
+			  }
+	       }else{
+	    	   if(packageName.equals("")){
+	    		   URL file=this.getClass().getResource("/");
+		    	   String path=file.getPath();
+	    		   currentPath=path;
+	    	   }
+	    	   List<File> fList=getFiles(currentPath);
+	    	   List<String> pathListCopy;
+	    	   for(File dir:fList){
+	    		   if(dir.isDirectory()){
+	    			   pathListCopy=new ArrayList<String>();
+	    			   pathListCopy.addAll(pathList);
+	    			   if(isMatchPattern(curPath, dir.getName())){
+	    				   String newPackName=packageName;
+	    				   if(!newPackName.equals("")){
+	    					   newPackName=packageName+".";
+		    			   }
+	    				   newPackName=newPackName+dir.getName();
+				    	   if(isReachedBottom){
+				    		   scanPackage(dir.getPath(), newPackName, classes);
+				    		   logger.info("Found matched package......"+newPackName);
+				    	   }else{
+				    		   getTargetPath(dir.getPath(), pathListCopy, newPackName, searchingStatus, classes);
+				    	   }
+				       }
+	    		   }
+	    	   }
+	    	   
+	       } 
+		}
+	}
+	public boolean isMatchPattern(String name,String target){
+		if (!isMatchOneStar(name)) {
+			return name.equals(target);
+		}else{
+			String patternStr=name.replace("*", "[\\d\\D]*");
+			Pattern pattern=Pattern.compile(patternStr);
+			Matcher matcher=pattern.matcher(target);
+			boolean b=matcher.matches();
+			return b;
+		}
+	}
+	public boolean isMatchTwoStars(String name){
+		return name.contains("**");
+	}
+	public boolean isMatchOneStar(String name){
+		return name.contains("*")&&!name.contains("**");
+	}
+	public List<File> getFiles(String path){
+		File dir=new File(path);
+		if(!dir.exists()){
+			return null;
+		}
+		File[] files=dir.listFiles();
+		List<File> fileList=new ArrayList<File>();
+		for (File file:files) {
+			fileList.add(file);
+		}
+		return fileList;
+	}
 	
-	public void scanPackage(String filePath,String packageName,Set<Class<?>> classes){ //递归得到所有的classes
+	public void scanPackage(String filePath,String packageName,Set<Class<?>> classes){ //得到要扫描的包的最顶层后，递归得到所有的classes
     	File dir=new File(filePath);
     	if(!dir.exists()){
     		return;
     	}
+    	if(!packageName.equals("")){
+    		packageName=packageName+".";
+    	}
     	File[] files=dir.listFiles();
     	for(File file:files){
     		if(file.isDirectory()){
-    			scanPackage(file.getPath(),packageName+"."+file.getName(),classes);
+    			scanPackage(file.getPath(),packageName+file.getName(),classes);
     		}else{
     			try {
     				int index=file.getName().lastIndexOf(".class");
     				if(index!=-1){
     					String className=file.getName().substring(0,index);
-        				Class<?> currentClass=Class.forName(packageName+"."+className);
+        				Class<?> currentClass=Class.forName(packageName+className);
         				if(currentClass.isAnnotationPresent(Entity.class)){
         					classes.add(currentClass);
+        					logger.info("Found entityclass......  :"+currentClass);
         				}
     				}
 				} catch (ClassNotFoundException e) {
@@ -355,7 +481,9 @@ public class MySqlEntity2Ddl {
 	
 	public static void main(String[] args) {
 		MySqlEntity2Ddl m = new MySqlEntity2Ddl();
-		Set<Class<?>> set=m.getAllEntityClasses("com");
+		Set<Class<?>> set=m.getAllEntityClasses("com.ideamoment.ideadata.*");
+		m.getAllEntityClasses("com.**.idea*.tool");
+		m.getAllEntityClasses("**.tool");
 		m.syncTable("mysql", "ideajdbc", null, TestGen.class, false);
 	}
 }
